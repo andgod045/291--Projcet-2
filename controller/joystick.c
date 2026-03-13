@@ -5,13 +5,7 @@
 #define JOYSTICK_ADC_MAX    1023U
 #define JOYSTICK_CENTER_ADC 512U
 
-#define JOYSTICK_MAX_OFFSET         512U
-#define JOYSTICK_MAG_MIN_OFFSET_ADC ((JOYSTICK_MAX_OFFSET * JOYSTICK_MAG_MIN_PERCENT) / 100U)
-#define JOYSTICK_MAG_MAX_OFFSET_ADC ((JOYSTICK_MAX_OFFSET * JOYSTICK_MAG_MAX_PERCENT) / 100U)
-
-#if (JOYSTICK_MAG_MIN_PERCENT >= JOYSTICK_MAG_MAX_PERCENT)
-#error "JOYSTICK_MAG_MIN_PERCENT must be less than JOYSTICK_MAG_MAX_PERCENT"
-#endif
+#define JOYSTICK_MAX_OFFSET 512U
 
 typedef struct {
     uint8_t last_raw;
@@ -144,12 +138,32 @@ void Joystick_Init(void)
     Joystick_DelayMs(10);
 }
 
+static int8_t Joystick_QuantizeAxis(const uint16_t value)
+{
+    uint16_t offset;
+    uint16_t magnitude;
+
+    if (value >= JOYSTICK_CENTER_ADC)
+        offset = value - JOYSTICK_CENTER_ADC;
+    else
+        offset = JOYSTICK_CENTER_ADC - value;
+
+    // Direct center-to-edge scaling without extra ramp thresholds.
+    magnitude = ((offset * IR_MOVEMENT_MAGNITUDE_MAX) + (JOYSTICK_MAX_OFFSET / 2U)) / JOYSTICK_MAX_OFFSET;
+    if (magnitude > IR_MOVEMENT_MAGNITUDE_MAX)
+        magnitude = IR_MOVEMENT_MAGNITUDE_MAX;
+
+    if (value >= JOYSTICK_CENTER_ADC)
+        return (int8_t)magnitude;
+
+    return (int8_t)(-(int8_t)magnitude);
+}
+
 void Joystick_Read(Joystick_State *state)
 {
     static uint8_t last_sw_stable = 0U;
     static uint8_t sw_initialized = 0U;
     uint16_t max_offset;
-    uint16_t magnitude_raw;
 
     // Read analog values
     state->x = ADC_Read(JOYSTICK_VRX_ADC_CHANNEL);
@@ -158,7 +172,7 @@ void Joystick_Read(Joystick_State *state)
     // Get direction
     state->direction = (uint8_t)Joystick_GetDirection(state->x, state->y);
 
-    // Compute magnitude from center distance and remap with configurable thresholding.
+    // Compute magnitude from center distance with direct linear scaling.
     const uint16_t x_offset = (state->x > JOYSTICK_CENTER_ADC) ?
                               (state->x - JOYSTICK_CENTER_ADC) :
                               (JOYSTICK_CENTER_ADC - state->x);
@@ -167,23 +181,12 @@ void Joystick_Read(Joystick_State *state)
                               (JOYSTICK_CENTER_ADC - state->y);
     max_offset = (x_offset > y_offset) ? x_offset : y_offset;
 
-    if (max_offset <= JOYSTICK_MAG_MIN_OFFSET_ADC)
-    {
-        state->magnitude = 0U;
-    }
-    else if (max_offset >= JOYSTICK_MAG_MAX_OFFSET_ADC)
-    {
-        state->magnitude = IR_MAGNITUDE_MAX;
-    }
-    else
-    {
-        const uint16_t range = JOYSTICK_MAG_MAX_OFFSET_ADC - JOYSTICK_MAG_MIN_OFFSET_ADC;
-        const uint16_t adjusted = max_offset - JOYSTICK_MAG_MIN_OFFSET_ADC;
+    state->magnitude = (uint8_t)(((max_offset * IR_MOVEMENT_MAGNITUDE_MAX) + (JOYSTICK_MAX_OFFSET / 2U)) / JOYSTICK_MAX_OFFSET);
+    if (state->magnitude > IR_MOVEMENT_MAGNITUDE_MAX)
+        state->magnitude = IR_MOVEMENT_MAGNITUDE_MAX;
 
-        // Round to nearest integer step when scaling into 0-IR_MAGNITUDE_MAX.
-        magnitude_raw = ((adjusted * IR_MAGNITUDE_MAX) + (range / 2U)) / range;
-        state->magnitude = (magnitude_raw >= IR_MAGNITUDE_MAX) ? IR_MAGNITUDE_MAX : (uint8_t)magnitude_raw;
-    }
+    state->throttle = Joystick_QuantizeAxis(state->y);
+    state->turn = Joystick_QuantizeAxis(state->x);
 
 
     // Read and debounce switch button (active low with pull-up)

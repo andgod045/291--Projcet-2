@@ -1,5 +1,7 @@
 # Recommended Joystick Control Scheme (VRX, VRY, SW)
 
+> Note: The authoritative March 2026 controller/robot agreement for path select/run/edit behavior is documented in `PATH_EDITING_SYSTEM.md`.
+
 This control scheme uses only the joystick axes (`vrx`, `vry`) and switch (`sw`). It is intentionally simple for the operator, while pushing path execution details to the robot side.
 
 ## 1) Command Set Coverage
@@ -20,17 +22,17 @@ All required commands are supported:
 
 Assume joystick sampled every ~50 ms.
 
-| Input                      | MANUAL                                  | AUTO_SELECT                                                 | CUSTOM_EDIT                                        | AUTO_RUN                | E_STOP                    |
-|----------------------------|-----------------------------------------|-------------------------------------------------------------|----------------------------------------------------|-------------------------|---------------------------|
-| Stick UP                   | `MOVE_FORWARD`                          | No-op                                                       | Set step = `FORWARD`                               | No-op                   | Ignore                    |
-| Stick DOWN                 | `MOVE_BACKWARD`                         | No-op                                                       | Set step = `BACKWARD`                              | No-op                   | Ignore                    |
-| Stick LEFT                 | `TURN_LEFT`                             | Select previous path/slot                                   | Set step = `LEFT`                                  | No-op                   | Ignore                    |
-| Stick RIGHT                | `TURN_RIGHT`                            | Select next path/slot                                       | Set step = `RIGHT`                                 | No-op                   | Ignore                    |
-| Stick CENTER               | `STOP` (regular stop)                   | No-op                                                       | No-op                                              | No-op                   | Required for clear        |
-| Rapid UP->DOWN OR DOWN->UP | `ROTATE_180`                            | No-op                                                       | Set step = `ROTATE_180`                            | No-op                   | Ignore                    |
-| SW short press             | Enter `AUTO_SELECT` (send `STOP` first) | Cancel -> `MANUAL`                                          | Save current step and begin editing next step      | No-op                   | Ignore                    |
-| SW double press            | No-op                                   | Confirm selection: run predefined/custom OR enter edit mode | Terminate path with `STOP` and save, goto `MANUAL` | `AUTO_STOP` -> `MANUAL` | Ignore                    |
-| SW long press (~1.2 s)     | Enter `E_STOP`                          | Enter `E_STOP`                                              | Enter `E_STOP`                                     | Enter `E_STOP`          | Attempt clear (see below) |
+| Input                      | MANUAL                                  | AUTO_SELECT                                                 | CUSTOM_EDIT             | AUTO_RUN                | E_STOP                    |
+|----------------------------|-----------------------------------------|-------------------------------------------------------------|-------------------------|-------------------------|---------------------------|
+| Stick UP                   | Direction = (0,7)                       | No-op                                                       | Set step = `FORWARD`    | No-op                   | Ignore                    |
+| Stick DOWN                 | Direction = (0,-7)                      | No-op                                                       | Set step = `BACKWARD`   | No-op                   | Ignore                    |
+| Stick LEFT                 | Direction = (-7,0)                      | Select previous path/slot                                   | Set step = `LEFT`       | No-op                   | Ignore                    |
+| Stick RIGHT                | Direction = (7,0)                       | Select next path/slot                                       | Set step = `RIGHT`      | No-op                   | Ignore                    |
+| Stick CENTER               | `STOP` (regular stop)                   | No-op                                                       | No-op                   | No-op                   | Required for clear        |
+| Rapid UP->DOWN OR DOWN->UP | No-op                                   | No-op                                                       | Set step = `ROTATE_180` | No-op                   | Ignore                    |
+| SW short press             | `ROTATE_180`                            | Cancel -> `MANUAL`                                          | Begin editing next step | No-op                   | Ignore                    |
+| SW double press            | Enter `AUTO_SELECT` (send `STOP` first) | Confirm selection: run predefined/custom OR enter edit mode | Save path -> `MANUAL`   | `AUTO_STOP` -> `MANUAL` | Ignore                    |
+| SW long press (~1.2 s)     | Enter `E_STOP`                          | Enter `E_STOP`                                              | Enter `E_STOP`          | Enter `E_STOP`          | Attempt clear (see below) |
 
 ### Double Press Timing Rule
 
@@ -41,6 +43,7 @@ Assume joystick sampled every ~50 ms.
 
 - **Regular stop (`STOP`)**: normal motion halt (triggered by `CENTER`, and also before mode changes).
 - **Emergency stop (`E_STOP`)**: safety-latched state, overrides everything, must be explicitly cleared.
+- Protocol mapping: regular stop uses `IR_MISC_STOP`; emergency latch uses `IR_MISC_ESTOP`; clear uses `IR_MISC_ESTOP_CLEAR`.
 
 ## 3) Rotate 180 Gesture Definition
 

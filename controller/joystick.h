@@ -5,18 +5,9 @@
 #include <stdint.h>
 
 // Direction thresholds for normalized 10-bit ADC values (0-1023).
-#define JOYSTICK_THRESHOLD_LOW   300U
-#define JOYSTICK_THRESHOLD_HIGH  723U
-
-// Magnitude remap thresholds as percent of max center-to-edge deflection.
-// <= MIN maps to 0, >= MAX maps to IR_MAGNITUDE_MAX, values between are linear.
-#ifndef JOYSTICK_MAG_MIN_PERCENT
-#define JOYSTICK_MAG_MIN_PERCENT 25U
-#endif
-
-#ifndef JOYSTICK_MAG_MAX_PERCENT
-#define JOYSTICK_MAG_MAX_PERCENT 90U
-#endif
+// Values inside [LOW, HIGH] are treated as centered on that axis.
+#define JOYSTICK_THRESHOLD_LOW   384U
+#define JOYSTICK_THRESHOLD_HIGH  640U
 
 typedef enum {
     JOYSTICK_DIR_CENTER = 0,
@@ -30,7 +21,9 @@ typedef struct {
     uint16_t x;
     uint16_t y;
     uint8_t direction;
-    uint8_t magnitude;      /* 0-7 normalized from joystick distance */
+    uint8_t magnitude;      /* 0-7 linearly quantized from joystick distance */
+    int8_t throttle;        /* -7..7 from Y axis (forward/back) */
+    int8_t turn;            /* -7..7 from X axis (left/right) */
 
     uint8_t sw_button;
     uint8_t sw_pressed;
