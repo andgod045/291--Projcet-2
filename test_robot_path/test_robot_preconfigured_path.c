@@ -23,16 +23,16 @@
 // ADC coil pins
 #define LEFT_COIL_PIN   QFP32_MUX_P1_0  // Left pickup coil on P1.0
 #define RIGHT_COIL_PIN  QFP32_MUX_P1_7  // Right pickup coil on P1.7
-#define CENTER_COIL_PIN QFP32_MUX_P2_5  // Center pickup coil on P2.5 for intersection
+#define CENTER_COIL_PIN QFP32_MUX_P1_2  // Center pickup coil on P1.2 for intersection
 
 // Require calibration while testing
 #define RIGHT_WHEEL_TRIM   90   // Right motor runs faster, scale it to 90%
-#define DEFAULT_ROBOT_SPEED      60
+#define DEFAULT_ROBOT_SPEED      55
 #define STEER_GAIN         40   // How much to steer
 
 // Intersection detection
 #define INTERSECTION_THRESHOLD  1.5  // If center coil voltage above this = intersection (calibrate later)
-#define TURN_SPEED              60   // PWM during pivot turns at intersections
+#define TURN_SPEED              20   // PWM during pivot turns at intersections
 #define TURN_TIME_MS            500  // How long to pivot at intersection (calibrate later)
 #define AFTER_INTERSECTION_MS        300  // Drive forward briefly after turn to clear intersection
 
@@ -307,30 +307,42 @@ void follow_wire(float left_v, float right_v)
     if (steer > STEER_GAIN) steer = STEER_GAIN;
     if (steer < -STEER_GAIN) steer = -STEER_GAIN;
 
-    // Set both motors spinning the forward direction.
-    dir_L = 0;
-    dir_R = 0;
+    // For sharp bend: reverse inner wheel for tight pivot turn
+    if (steer > 30) // calibrate the condition
+    {
+        // Wire is far left, pivot left: reverse left wheel, right forward
+        dir_L = 1; dir_R = 0;
+        pwm_L = TURN_SPEED;
+        pwm_R = DEFAULT_ROBOT_SPEED;
+    } 
+    else if (steer < -30) 
+    {
+        // Wire is far right, pivot right: left forward, reverse right wheel
+        dir_L = 0; dir_R = 1;
+        pwm_L = DEFAULT_ROBOT_SPEED;
+        pwm_R = TURN_SPEED;
+    } 
+    else 
+    {
+        // Normal smooth curve: both wheels forward, adjust speeds
+        dir_L = 0;
+        dir_R = 0;
+        
+        pwm_left  = DEFAULT_ROBOT_SPEED - steer;
+        pwm_right = DEFAULT_ROBOT_SPEED + steer;
 
-    // Adjust motor speeds
-    // If detects left wire (+ve steer), slows down left motor
-    // and speeds up right motor.
-    // If detects right wire (-ve steer) slows down right motor
-    // and speeds up left motor.
-    pwm_left  = DEFAULT_ROBOT_SPEED - steer;
-    pwm_right = DEFAULT_ROBOT_SPEED + steer;
+        // Limit to valid range, 0 and 100.
+        if (pwm_left > 100) pwm_left = 100;
+        if (pwm_left < 0)   pwm_left = 0;
+        if (pwm_right > 100) pwm_right = 100;
+        if (pwm_right < 0)   pwm_right = 0;
 
-    // Limit to valid range, 0 and 100.
-    if (pwm_left > 100) pwm_left = 100;
-    if (pwm_left < 0)   pwm_left = 0;
-    if (pwm_right > 100) pwm_right = 100;
-    if (pwm_right < 0)   pwm_right = 0;
+        // Apply right wheel trim.
+        pwm_right = (pwm_right * RIGHT_WHEEL_TRIM) / 100;
 
-    // Apply right wheel trim.
-    pwm_right = (pwm_right * RIGHT_WHEEL_TRIM) / 100;
-
-    // Set the global variables that the ISR uses to drive the motors
-    pwm_L = pwm_left;
-    pwm_R = pwm_right;
+        pwm_L = pwm_left;
+        pwm_R = pwm_right;
+    }
 }
 
 // Called when center pickup coil detects an intersection.
@@ -422,7 +434,7 @@ void main(void)
     // Configure ADC for the 3 pickup coils
     InitPinADC(1, 0);  // Left coil on P1.0
     InitPinADC(1, 7);  // Right coil on P1.7
-    InitPinADC(2, 5);  // Center coil on P2.5
+    InitPinADC(1, 2);  // Center coil on P1.2
     InitADC();
 
     // Start motor PWM timer
