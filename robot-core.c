@@ -3,6 +3,8 @@
 #include <stdint.h>
 
 #define SYSCLK 72000000L // 72 MHz System Clock
+#define SARCLK 18000000L // Required for ADC clock divider
+#define VDD 3.3035       // Required for Volts_at_Pin math
 
 //==================== Calibration ====================
 #define RIGHT_WHEEL_TRIM 90 // Scales the right motor down to 85% of target speed
@@ -22,7 +24,7 @@
 #define LCD_D7  P1_1
 
 //==================== Button, Motor & IR Pins ====================
-#define BTN_L       P2_6  
+#define BTN_L       P3_7  // <-- MOVED to P3.7 to free up P2.6!
 #define BTN_R       P3_1  
 
 #define MOTOR_L_FWD P2_4 
@@ -31,6 +33,12 @@
 #define MOTOR_R_REV P2_2    
 
 #define IR_PIN      P0_0  // TSOP33338 Output
+
+//==================== Reference ADC Pins ====================
+// Spaced far apart to prevent electrical interference
+#define PEAK_01_PIN QFP32_MUX_P0_1
+#define PEAK_10_PIN QFP32_MUX_P1_0
+#define PEAK_26_PIN QFP32_MUX_P2_6
 
 // =========================================================================
 //                          NEW RC5 MOVEMENT PROTOCOL LIBRARY
@@ -251,10 +259,9 @@ typedef enum {
     MODE_MANUAL,
     MODE_CIRCLE,
     MODE_FIGURE_8,
-    MODE_ROTATE_180 // <-- NEW STATE ADDED
+    MODE_ROTATE_180 
 } RobotMode;
 
-// Helper function to print XY axes neatly
 void LCD_PrintAxis(int8_t val)
 {
     if (val < 0) { LCD_Data('-'); val = -val; }
@@ -262,23 +269,22 @@ void LCD_PrintAxis(int8_t val)
     LCD_Data('0' + val);
 }
 
-// Helper to print Misc codes
 void LCD_PrintIRMisc(IrMiscCode cmd)
 {
     LCD_SetCursor(0, 0);
+    // Fixed at exactly 7 characters to leave space for ADCs on the top row
     switch (cmd)
     {
-        case IR_MISC_FORWARD:    LCD_Print("CMD: FORWARD    "); break;
-        case IR_MISC_BACKWARD:   LCD_Print("CMD: BACKWARD   "); break;
-        case IR_MISC_LEFT:       LCD_Print("CMD: PIVOT LEFT "); break;
-        case IR_MISC_RIGHT:      LCD_Print("CMD: PIVOT RIGH "); break;
-        case IR_MISC_STOP:       LCD_Print("CMD: STOPPED    "); break;
-        case IR_MISC_ROTATE_180: LCD_Print("CMD: ROTATE 180 "); break; // <-- ADDED DISPLAY STRING
-        default:                 LCD_Print("CMD: MISC CMD   "); break;
+        case IR_MISC_FORWARD:    LCD_Print("FWD    "); break;
+        case IR_MISC_BACKWARD:   LCD_Print("BCK    "); break;
+        case IR_MISC_LEFT:       LCD_Print("LFT    "); break;
+        case IR_MISC_RIGHT:      LCD_Print("RGT    "); break;
+        case IR_MISC_STOP:       LCD_Print("STP    "); break;
+        case IR_MISC_ROTATE_180: LCD_Print("180    "); break; 
+        default:                 LCD_Print("???    "); break;
     }
 }
 
-// Timer 2 ISR (10kHz)
 void Timer2_ISR(void) interrupt 5 using 1 
 {
     static unsigned char pwm_counter = 0;
@@ -288,7 +294,6 @@ void Timer2_ISR(void) interrupt 5 using 1
     
     TF2H = 0; 
     
-    // --- 1. Motor PWM Logic ---
     pwm_counter++;
     if(pwm_counter >= 100) pwm_counter = 0;
 
@@ -304,19 +309,16 @@ void Timer2_ISR(void) interrupt 5 using 1
         else            { MOTOR_R_FWD = 0; MOTOR_R_REV = 1; }
     } else { MOTOR_R_FWD = 0; MOTOR_R_REV = 0; }
 
-    // --- 2. IR RC5 Decoder Polling ---
     ir_ticks_us += 100; 
     current_ir_pin = IR_PIN;
     
     if (current_ir_pin != last_ir_pin)
     {
         unsigned char ended_level = (last_ir_pin == 0) ? 1 : 0;
-        
         if (ir_status != IR_DECODE_DONE) 
         {
             ir_status = IrRC5_DecoderFeed(&ir_decoder, ended_level, ir_ticks_us);
         }
-        
         ir_ticks_us = 0;
         last_ir_pin = current_ir_pin;
     }
@@ -332,6 +334,115 @@ void Timer2_ISR(void) interrupt 5 using 1
 }
 
 // =========================================================================
+//                          REFERENCE ADC FUNCTIONS
+// =========================================================================
+
+void InitADC (void)
+{
+    SFRPAGE = 0x00;
+    ADEN=0; // Disable ADC
+
+    ADC0CN1=
+        (0x2 << 6) | // 0x0: 10-bit, 0x1: 12-bit, 0x2: 14-bit
+        (0x0 << 3) | // 0x0: No shift.
+        (0x0 << 0) ; // Accumulate 1 conversion
+
+    ADC0CF0=
+        ((SYSCLK/SARCLK) << 3) | // SAR Clock Divider. Max is 18MHz.
+        (0x0 << 2); // 0:SYSCLK ADCCLK = SYSCLK.
+
+    ADC0CF1=
+        (0 << 7)   | // 0: Disable low power mode.
+        (0x1E << 0); // Conversion Tracking Time.
+
+    ADC0CN0 =
+        (0x0 << 7) | // ADEN. 0: Disable ADC0.
+        (0x0 << 6) | // IPOEN. 0: Keep ADC powered on.
+        (0x0 << 5) | // ADINT.
+        (0x0 << 4) | // ADBUSY.
+        (0x0 << 3) | // ADWINT.
+        (0x0 << 2) | // ADGN. 0x0: PGA gain=1.
+        (0x0 << 0) ; // TEMPE. 0: Disable Temperature Sensor.
+
+    ADC0CF2=
+        (0x0 << 7) | // GNDSL. 0: reference is the GND pin.
+        (0x1 << 5) | // REFSL. 0x1: VDD pin.
+        (0x1F << 0); // ADPWR. Power Up Delay Time.
+
+    ADC0CN2 =
+        (0x0 << 7) | // PACEN. 0x0: ADC accumulator is over-written.
+        (0x0 << 0) ; // ADCM. 0x0: ADBUSY trigger.
+
+    ADEN=1; // Enable ADC
+}
+
+void InitPinADC (unsigned char portno, unsigned char pinno)
+{
+    unsigned char mask;
+    mask=1<<pinno;
+
+    SFRPAGE = 0x20;
+    switch (portno)
+    {
+        case 0:
+            P0MDIN &= (~mask); // Set pin as analog input
+            P0SKIP |= mask;    // Skip Crossbar decoding for this pin
+        break;
+        case 1:
+            P1MDIN &= (~mask);
+            P1SKIP |= mask;
+        break;
+        case 2:
+            P2MDIN &= (~mask);
+            P2SKIP |= mask;
+        break;
+        default:
+        break;
+    }
+    SFRPAGE = 0x00;
+}
+
+unsigned int ADC_at_Pin(unsigned char pin)
+{
+    ADC0MX = pin;   // Select input from pin
+
+    // --- TRACKING DELAY ---
+    // Gives the internal capacitor time to charge to the new pin's voltage
+    Timer3us(100);
+
+    // --- GHOSTING FIX: DUMMY READ ---
+    // Discard the first conversion to flush out any leftover voltage
+    ADINT = 0;
+    ADBUSY = 1;     
+    while (!ADINT); 
+
+    // Take the actual reading
+    ADINT = 0;
+    ADBUSY = 1;     // Convert voltage at the pin
+    while (!ADINT); // Wait for conversion to complete
+    
+    return (ADC0);
+}
+
+// Custom fixed-point integer formatting (Bypasses Float memory errors completely!)
+void LCD_PrintPeak(unsigned char row, unsigned char col, unsigned int raw_adc)
+{
+    // Converts raw ADC (0-16383) to Millivolts (0-3304) using high precision int math
+    unsigned int mv = (unsigned int)(((unsigned long)raw_adc * 3304UL) / 16383UL);
+    
+    // Extracts exact digits for X.XX format
+    unsigned char d1 = mv / 1000;
+    unsigned char d2 = (mv % 1000) / 100;
+    unsigned char d3 = (mv % 100) / 10;
+    
+    LCD_SetCursor(row, col);
+    LCD_Data('0' + d1);
+    LCD_Data('.');
+    LCD_Data('0' + d2);
+    LCD_Data('0' + d3);
+}
+
+// =========================================================================
 //                          MAIN LOOP
 // =========================================================================
 
@@ -344,25 +455,36 @@ void main(void)
     unsigned int mode_timer_ms = 0;
     unsigned char fig8_state = 0;
 
+    unsigned int peak_01_raw;
+    unsigned int peak_10_raw;
+    unsigned int peak_26_raw;
+
     _c51_external_startup();
 
     SFRPAGE = 0x20;
     P1MDOUT |= 0x7E;  
     P2MDOUT |= 0x1E;  
     
-    P2MDIN  |= 0x40;   
-    P2MDOUT &= ~0x40; 
-    P3MDIN  |= 0x02;
-    P3MDOUT &= ~0x02; 
+    // --- UPDATED DIGITAL PINS ---
+    // Removed the digital override from P2.6 so it can cleanly act as an ADC
+    // Added digital input config for P3.7 (New Left Button)
+    P3MDIN  |= 0x82; // 0x80 (P3.7) | 0x02 (P3.1)
+    P3MDOUT &= ~0x82; 
 
     P0MDIN  |= 0x01;
     P0MDOUT &= ~0x01;
     P0SKIP  |= 0x01;  
     
     SFRPAGE = 0x00;
-    P2 |= 0x40; 
-    P3 |= 0x02; 
+    P2 |= 0x00; // Removed P2.6 pullup override
+    P3 |= 0x82; // Enable pullups for P3.1 and P3.7
     P0 |= 0x01; 
+
+    // --- EXACT REFERENCE INIT FOR NEW SPACED ADC PINS ---
+    InitPinADC(0, 1); 
+    InitPinADC(1, 0); 
+    InitPinADC(2, 6); 
+    InitADC();
 
     MOTOR_L_FWD = 0; MOTOR_L_REV = 0;
     MOTOR_R_FWD = 0; MOTOR_R_REV = 0;
@@ -371,8 +493,8 @@ void main(void)
     Timer2_Init();
     
     LCD_Init();
-    LCD_SetCursor(0, 0); LCD_Print("WAITING FOR IR  ");
-    LCD_SetCursor(1, 0); LCD_Print("L:  0%   R:  0% ");
+    LCD_SetCursor(0, 0); LCD_Print("WAITING       ");
+    LCD_SetCursor(1, 0); LCD_Print("L:00 R:00     ");
 
     while(1)
     {
@@ -382,7 +504,7 @@ void main(void)
             dir_L = 0; dir_R = 0; 
             pwm_L = CURVE_FAST;
             pwm_R = ((unsigned int)CURVE_SLOW * RIGHT_WHEEL_TRIM) / 100;
-            LCD_SetCursor(0, 0); LCD_Print("AUTOPLT: CIRCLE ");
+            LCD_SetCursor(0, 0); LCD_Print("CIRCLE ");
         }
         else if (current_mode == MODE_FIGURE_8)
         {
@@ -401,25 +523,23 @@ void main(void)
                 pwm_R = ((unsigned int)CURVE_FAST * RIGHT_WHEEL_TRIM) / 100;
                 if (mode_timer_ms >= FIG8_TIME_MS) { mode_timer_ms = 0; fig8_state = 0; }
             }
-            LCD_SetCursor(0, 0); LCD_Print("AUTOPLT: FIG 8  ");
+            LCD_SetCursor(0, 0); LCD_Print("FIG 8  ");
         }
-        else if (current_mode == MODE_ROTATE_180) // <-- TIMED 180 SPIN LOGIC
+        else if (current_mode == MODE_ROTATE_180) 
         {
-            // Spin in place (Left wheel Reverse, Right wheel Forward)
             dir_L = 1; 
             dir_R = 0; 
-            pwm_L = 100; // Max speed
-            pwm_R = RIGHT_WHEEL_TRIM; // Max trimmed speed
+            pwm_L = 100; 
+            pwm_R = RIGHT_WHEEL_TRIM; 
             
-            mode_timer_ms += 30; // Increment timer by the loop delay (30ms)
+            mode_timer_ms += 30; 
             
-            // When timer hits target, drop back to manual mode and stop
             if (mode_timer_ms >= TURN_180_TIME_MS) 
             {
                 current_mode = MODE_MANUAL;
                 pwm_L = 0; 
                 pwm_R = 0; 
-                LCD_SetCursor(0, 0); LCD_Print("CMD: STOPPED    ");
+                LCD_SetCursor(0, 0); LCD_Print("STOPPED");
             }
         }
 
@@ -434,10 +554,9 @@ void main(void)
                     unsigned char default_pwm = 80; 
                     unsigned char trimmed_R = ((unsigned int)default_pwm * RIGHT_WHEEL_TRIM) / 100;
 
-                    // FILTER: Ignore "Key Release" STOP commands if we are spinning
                     if (current_mode == MODE_ROTATE_180 && misc_code == IR_MISC_STOP)
                     {
-                        // Do absolutely nothing! Let the spin timer finish.
+                        // Ignore STOP while spinning
                     }
                     else
                     {
@@ -463,26 +582,20 @@ void main(void)
                 int8_t x, y;
                 if (IrRC5_FrameToMovement((IrRC5Frame *)&ir_decoder.frame, &x, &y))
                 {
-                    // FILTER: Ignore "Neutral Joystick" release commands if we are spinning
                     if (current_mode == MODE_ROTATE_180 && x == 0 && y == 0)
                     {
-                        // Do absolutely nothing! Let the spin timer finish.
+                        // Ignore Neutral while spinning
                     }
                     else
                     {
                         int left_val, right_val;
-                        
-                        // User pushed the joystick! Cancel autopilot and take manual control.
                         current_mode = MODE_MANUAL; 
 
                         LCD_SetCursor(0, 0); 
-                        LCD_Print("CMD: X:");
-                        LCD_PrintAxis(x);
-                        LCD_Print(" Y:");
-                        LCD_PrintAxis(y);
-                        LCD_Print(" ");
+                        LCD_Data('X'); LCD_PrintAxis(x);
+                        LCD_Data('Y'); LCD_PrintAxis(y);
+                        LCD_Data(' ');
 
-                        // Arcade Drive Mixer
                         left_val = ((int)y * 100) / 7 + ((int)x * 100) / 7;
                         right_val = ((int)y * 100) / 7 - ((int)x * 100) / 7;
 
@@ -509,7 +622,7 @@ void main(void)
             if (btn_L_pressed == 0) 
             {
                 current_mode = MODE_MANUAL;
-                LCD_SetCursor(0, 0); LCD_Print("CMD: L-BTN OVRD ");
+                LCD_SetCursor(0, 0); LCD_Print("L-OVRD ");
                 dir_L = !dir_L;
                 pwm_L = 0;
                 btn_L_pressed = 1;
@@ -523,7 +636,7 @@ void main(void)
             if (btn_R_pressed == 0) 
             {
                 current_mode = MODE_MANUAL;
-                LCD_SetCursor(0, 0); LCD_Print("CMD: R-BTN OVRD ");
+                LCD_SetCursor(0, 0); LCD_Print("R-OVRD ");
                 dir_R = !dir_R;
                 pwm_R = 0;
                 btn_R_pressed = 1;
@@ -532,7 +645,18 @@ void main(void)
         } 
         else btn_R_pressed = 0;
 
+        // --- 3. LCD Updates ---
         LCD_PrintMotorCompact(pwm_L, pwm_R); 
+
+        // Read all three spread-out pins as RAW INTEGERS
+        peak_01_raw = ADC_at_Pin(PEAK_01_PIN);
+        peak_10_raw = ADC_at_Pin(PEAK_10_PIN);
+        peak_26_raw = ADC_at_Pin(PEAK_26_PIN);
+
+        // Display nicely formatted as "X.XX" across the LCD
+        LCD_PrintPeak(0, 7, peak_01_raw);  // Top row, middle
+        LCD_PrintPeak(0, 12, peak_10_raw); // Top row, far right
+        LCD_PrintPeak(1, 12, peak_26_raw); // Bottom row, far right
         
         waitms(30); 
     }
@@ -546,16 +670,16 @@ void LCD_PrintMotorCompact(unsigned char pwmL, unsigned char pwmR)
 {
     LCD_SetCursor(1, 0);
     
+    // Prints "L:99 R:99 " in exactly 10 characters to save space
     LCD_Print("L:");
-    if (pwmL == 100) { LCD_Print("100%"); }
-    else if (pwmL >= 10) { LCD_Data(' '); LCD_Data('0' + (pwmL/10)); LCD_Data('0' + (pwmL%10)); LCD_Data('%'); }
-    else { LCD_Print("  "); LCD_Data('0' + pwmL); LCD_Data('%'); }
+    if (pwmL >= 100) { LCD_Print("99"); }
+    else { LCD_Data('0' + (pwmL/10)); LCD_Data('0' + (pwmL%10)); }
     
-    LCD_Print("  R:");
-    if (pwmR >= 100) { LCD_Print("100%"); } 
-    else if (pwmR >= 10) { LCD_Data(' '); LCD_Data('0' + (pwmR/10)); LCD_Data('0' + (pwmR%10)); LCD_Data('%'); }
-    else { LCD_Print("  "); LCD_Data('0' + pwmR); LCD_Data('%'); }
-    LCD_Print(" ");
+    LCD_Print(" R:");
+    if (pwmR >= 100) { LCD_Print("99"); } 
+    else { LCD_Data('0' + (pwmR/10)); LCD_Data('0' + (pwmR%10)); }
+    
+    LCD_Print("  "); // Pad out space
 }
 
 void Timer2_Init(void)
