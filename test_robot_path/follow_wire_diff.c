@@ -27,15 +27,21 @@
 #define LCD_D6  P1_2
 #define LCD_D7  P1_1
 
+// ---------------- Turn Indicator LEDs ----------------
+// Change these if your LEDs are wired to different pins.
+#define LED_TURN_LEFT   P0_2
+#define LED_TURN_RIGHT  P3_0
+#define TURN_LED_BLINK_MS 100
+
 // ---------------- Manual Path Select ----------------
 // 0 = Path 1, 1 = Path 2, 2 = Path 3
-#define MANUAL_PATH_INDEX 1
+#define MANUAL_PATH_INDEX 0
 #if (MANUAL_PATH_INDEX > 2)
 #error MANUAL_PATH_INDEX must be 0, 1, or 2
 #endif
 
 #define RIGHT_WHEEL_TRIM      90
-#define DEFAULT_ROBOT_SPEED   60
+#define DEFAULT_ROBOT_SPEED   50
 #define FOLLOW_TURN_SPEED     14 // Inner wheel PWM during sharp pivot corrections in follow_wire mode
 #define COIL_DIFF_OFFSET_V    0 
 #define ALIGN_DEADBAND_V      0.22f // If |left-right| is within this range, drive straight (no steering correction)
@@ -414,6 +420,12 @@ void stop_motors(void)
     dir_R = 0;
 }
 
+void set_turn_leds(unsigned char left_on, unsigned char right_on)
+{
+    LED_TURN_LEFT = left_on ? 1 : 0;
+    LED_TURN_RIGHT = right_on ? 1 : 0;
+}
+
 void set_forward(unsigned char left_pwm, unsigned char right_pwm)
 {
     dir_L = 0;
@@ -475,6 +487,11 @@ void follow_wire(float left_v, float right_v)
 
 unsigned char execute_turn(unsigned char turn_left)
 {
+    unsigned int total_ms;
+    unsigned int elapsed_ms;
+    unsigned int step_ms;
+    unsigned char led_state;
+
     // Timed snap turn: do not use center threshold exit here.
     // Intersection entry already came from first debounced center spike.
     stop_motors();
@@ -483,15 +500,34 @@ unsigned char execute_turn(unsigned char turn_left)
     if (turn_left)
     {
         pivot_left(SNAP_TURN_SPEED);  // Start spinning left
-        waitms(SNAP_TURN_LEFT_MS);
+        total_ms = SNAP_TURN_LEFT_MS;
+        set_turn_leds(1, 0);
     }
     else
     {
         pivot_right(SNAP_TURN_SPEED);  // Start spinning right
-        waitms(SNAP_TURN_RIGHT_MS);
+        total_ms = SNAP_TURN_RIGHT_MS;
+        set_turn_leds(0, 1);
+    }
+
+    // Blink turn LED while turning.
+    elapsed_ms = 0;
+    led_state = 1;
+    while (elapsed_ms < total_ms)
+    {
+        step_ms = TURN_LED_BLINK_MS;
+        if ((total_ms - elapsed_ms) < step_ms) step_ms = total_ms - elapsed_ms;
+
+        waitms(step_ms);
+        elapsed_ms += step_ms;
+
+        led_state = !led_state;
+        if (turn_left) set_turn_leds(led_state, 0);
+        else           set_turn_leds(0, led_state);
     }
 
     stop_motors();
+    set_turn_leds(0, 0);
     return 1;
 }
 
@@ -613,10 +649,13 @@ void main(void)
     // Configure GPIO pins as push-pull outputs
     SFRPAGE = 0x20;
     P1MDOUT |= 0x7E; // LCD pins P1.1..P1.6
+    P0MDOUT |= 0x04; // P0.2 LED output
     P2MDOUT |= 0x1E; // Motor pins P2.1..P2.4
+    P3MDOUT |= 0x01; // P3.0 LED output
     SFRPAGE = 0x00;
 
     stop_motors(); // Make sure motors are off at startup
+    set_turn_leds(0, 0);
 
     // Configure ADC input pins for the 3 pickup coils
     InitPinADC(1, 0); // Left coil on P1.0
