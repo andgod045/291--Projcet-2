@@ -90,7 +90,7 @@ COOLDOWN = 2
 TARGET_SHOULDER_WIDTH = 0.3
 DISTANCE_TOLERANCE = 0.05
 
-MODE_CYCLE = ['RC', 'TRACKING', 'GUIDE_WIRE', 'SCAN']
+MODE_CYCLE = ['RC', 'TRACKING', 'GUIDE_WIRE']
 
 def next_mode(current):
     idx = MODE_CYCLE.index(current) if current in MODE_CYCLE else 0
@@ -135,37 +135,6 @@ def get_distance_command(shoulder_width):
         return 'FORWARD'
     else:
         return 'NORMAL'
-
-# --- SCAN MODE ---
-GRID_W = 40
-GRID_H = 40
-CELL_SIZE = 15
-occupancy_grid = [[0] * GRID_W for _ in range(GRID_H)]
-robot_pos = [GRID_W // 2, GRID_H // 2]
-robot_heading = 0
-
-def update_scan_map(steering, distance_cmd):
-    pass
-
-def draw_scan_map(frame):
-    map_w = GRID_W * CELL_SIZE
-    map_h = GRID_H * CELL_SIZE
-    h, w = frame.shape[:2]
-    ox = w - map_w - 10
-    oy = 10
-    for row in range(GRID_H):
-        for col in range(GRID_W):
-            color = (50, 50, 50) if occupancy_grid[row][col] == 0 else (0, 0, 200)
-            cv2.rectangle(frame,
-                (ox + col * CELL_SIZE, oy + row * CELL_SIZE),
-                (ox + col * CELL_SIZE + CELL_SIZE - 1, oy + row * CELL_SIZE + CELL_SIZE - 1),
-                color, -1)
-    rx = ox + robot_pos[0] * CELL_SIZE + CELL_SIZE // 2
-    ry = oy + robot_pos[1] * CELL_SIZE + CELL_SIZE // 2
-    cv2.circle(frame, (rx, ry), CELL_SIZE // 2, (0, 255, 0), -1)
-    cv2.rectangle(frame, (ox, oy), (ox + map_w, oy + map_h), (255, 255, 255), 1)
-    cv2.putText(frame, 'MAP', (ox, oy - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
 # --- THREADED FRAME CAPTURE ---
 class FrameGrabber(threading.Thread):
@@ -405,12 +374,6 @@ while True:
             send_speed('NORMAL')
             last_steering_command = 'STOP'
             last_distance_command = 'NORMAL'
-
-    # --- SCAN MODE DISPLAY ---
-    if current_mode == 'SCAN':
-        draw_scan_map(frame)
-        cv2.putText(frame, 'RC mode to drive and scan', (10, 170),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
     # --- MODE DISPLAY ---
     mode_color = (0, 0, 255) if current_mode == 'STOP' else (0, 255, 0)
