@@ -8,7 +8,7 @@
 
 // ==================== Calibration ====================
 #define RIGHT_WHEEL_TRIM 90
-#define TURN_180_TIME_MS 900
+#define TURN_180_TIME_MS 700
 #define CURVE_FAST       80
 #define CURVE_SLOW       35
 #define FIG8_TIME_MS     3000
@@ -30,11 +30,20 @@
 #define IR_PIN      P0_0
 #define LED_LEFT    P0_2
 #define LED_RIGHT   P3_0
+#define BB_SCL      P0_7
+#define BB_SDA      P0_6
+#define TRACK_EN    P0_3
+#define TRACK_CMD0  P0_4
+#define TRACK_CMD1  P0_5
 
 // ==================== ADC Pins ====================
 #define LEFT_COIL_PIN   QFP32_MUX_P1_0
 #define RIGHT_COIL_PIN  QFP32_MUX_P2_6
 #define CENTER_COIL_PIN QFP32_MUX_P0_1
+
+// ==================== ToF Config ====================
+#define TOF_STOP_MM 180
+#define VL53L0X_OUT_OF_RANGE 8190
 
 // ==================== IR RC5 Protocol ====================
 #define IR_RC5_ADDRESS            0x00U
@@ -53,7 +62,7 @@ typedef enum {
     IR_MISC_STOP = 0, IR_MISC_FORWARD = 1, IR_MISC_BACKWARD = 2,
     IR_MISC_LEFT = 3, IR_MISC_RIGHT = 4, IR_MISC_ROTATE_180 = 5,
     IR_MISC_START_PATH = 6, IR_MISC_EDIT_PATH = 8,
-    IR_MISC_ESTOP_CLEAR = 12,
+    IR_MISC_ESTOP_CLEAR = 12, IR_MISC_VISION_ENABLE = 13, IR_MISC_VISION_DISABLE = 14,
     IR_MISC_SELECT_PATH_1 = IR_MISC_SELECT_PATH_BASE
 } IrMiscCode;
 
@@ -80,7 +89,7 @@ static int nibble_to_axis(uint8_t nib, int8_t *axis) {
 
 int IrRC5_IsValidDataType(uint8_t dt) { return (dt <= 1) ? 1 : 0; }
 int IrRC5_IsValidMiscCode(uint8_t mc) {
-    return (mc <= 12 || (mc >= IR_MISC_SELECT_PATH_BASE && mc <= IR_MISC_SELECT_PATH_MAX)) ? 1 : 0;
+    return (mc <= 14 || (mc >= IR_MISC_SELECT_PATH_BASE && mc <= IR_MISC_SELECT_PATH_MAX)) ? 1 : 0;
 }
 
 int IrRC5_DecodeMovement(uint8_t payload, int8_t *x, int8_t *y) {
@@ -157,34 +166,203 @@ void LCD_Print(const char *s);
 void LCD_SetCursor(unsigned char row, unsigned char col);
 void LCD_Init(void);
 void LCD_PrintMotorCompact(unsigned char pwmL, unsigned char pwmR);
+unsigned int ADC_at_Pin(unsigned char pin);
+static unsigned int ADC_to_mV(unsigned char pin);
+void trigger_siren(void);
+void BB_I2C_Delay(void);
+bit BB_I2C_Start(void);
+void BB_I2C_Stop(void);
+bit BB_I2C_WriteByte(unsigned char b);
+unsigned char BB_I2C_ReadByte(bit nack);
+bit i2c_read_addr8_data8(unsigned char address, unsigned char *value);
+bit i2c_read_addr8_data16(unsigned char address, unsigned int *value);
+bit i2c_write_addr8_data8(unsigned char address, unsigned char value);
+bit ToF_Init(void);
+void ToF_Update(void);
+bit ToF_Blocking(void);
+
+// ==================== VL53L0X Registers ====================
+#define REG_IDENTIFICATION_MODEL_ID                     0xC0
+#define REG_VHV_CONFIG_PAD_SCL_SDA_EXTSUP_HV           0x89
+#define REG_MSRC_CONFIG_CONTROL                         0x60
+#define REG_FINAL_RANGE_CONFIG_MIN_COUNT_RATE_RTN_LIMIT 0x44
+#define REG_SYSTEM_SEQUENCE_CONFIG                      0x01
+#define REG_DYNAMIC_SPAD_REF_EN_START_OFFSET            0x4F
+#define REG_DYNAMIC_SPAD_NUM_REQUESTED_REF_SPAD         0x4E
+#define REG_GLOBAL_CONFIG_REF_EN_START_SELECT           0xB6
+#define REG_SYSTEM_INTERRUPT_CONFIG_GPIO                0x0A
+#define REG_GPIO_HV_MUX_ACTIVE_HIGH                     0x84
+#define REG_SYSTEM_INTERRUPT_CLEAR                      0x0B
+#define REG_RESULT_INTERRUPT_STATUS                     0x13
+#define REG_SYSRANGE_START                              0x00
+#define REG_GLOBAL_CONFIG_SPAD_ENABLES_REF_0            0xB0
+#define REG_RESULT_RANGE_STATUS                         0x14
+#define VL53L0X_EXPECTED_DEVICE_ID 0xEE
+#define RANGE_SEQUENCE_STEP_DSS         0x28
+#define RANGE_SEQUENCE_STEP_PRE_RANGE   0x40
+#define RANGE_SEQUENCE_STEP_FINAL_RANGE 0x80
+typedef enum { CALIBRATION_TYPE_VHV, CALIBRATION_TYPE_PHASE } calibration_type_t;
+static idata uint8_t stop_variable = 0;
+
+static bit device_is_booted(void) {
+    uint8_t id = 0;
+    if (!i2c_read_addr8_data8(REG_IDENTIFICATION_MODEL_ID, &id)) return 0;
+    return (id == VL53L0X_EXPECTED_DEVICE_ID) ? 1 : 0;
+}
+static bit data_init(void) {
+    bit s; uint8_t v = 0;
+    if (!i2c_read_addr8_data8(REG_VHV_CONFIG_PAD_SCL_SDA_EXTSUP_HV, &v)) return 0;
+    if (!i2c_write_addr8_data8(REG_VHV_CONFIG_PAD_SCL_SDA_EXTSUP_HV, v | 0x01)) return 0;
+    s = i2c_write_addr8_data8(0x88, 0x00);
+    s &= i2c_write_addr8_data8(0x80, 0x01);
+    s &= i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x00, 0x00);
+    s &= i2c_read_addr8_data8(0x91, &stop_variable);
+    s &= i2c_write_addr8_data8(0x00, 0x01);
+    s &= i2c_write_addr8_data8(0xFF, 0x00);
+    s &= i2c_write_addr8_data8(0x80, 0x00);
+    return s;
+}
+static bit load_default_tuning_settings(void) {
+    bit s = i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x00, 0x00); s &= i2c_write_addr8_data8(0xFF, 0x00);
+    s &= i2c_write_addr8_data8(0x09, 0x00); s &= i2c_write_addr8_data8(0x10, 0x00);
+    s &= i2c_write_addr8_data8(0x11, 0x00); s &= i2c_write_addr8_data8(0x24, 0x01);
+    s &= i2c_write_addr8_data8(0x25, 0xFF); s &= i2c_write_addr8_data8(0x75, 0x00);
+    s &= i2c_write_addr8_data8(0xFF, 0x01); s &= i2c_write_addr8_data8(0x4E, 0x2C);
+    s &= i2c_write_addr8_data8(0x48, 0x00); s &= i2c_write_addr8_data8(0x30, 0x20);
+    s &= i2c_write_addr8_data8(0xFF, 0x00); s &= i2c_write_addr8_data8(0x30, 0x09);
+    s &= i2c_write_addr8_data8(0x54, 0x00); s &= i2c_write_addr8_data8(0x31, 0x04);
+    s &= i2c_write_addr8_data8(0x32, 0x03); s &= i2c_write_addr8_data8(0x40, 0x83);
+    s &= i2c_write_addr8_data8(0x46, 0x25); s &= i2c_write_addr8_data8(0x60, 0x00);
+    s &= i2c_write_addr8_data8(0x27, 0x00); s &= i2c_write_addr8_data8(0x50, 0x06);
+    s &= i2c_write_addr8_data8(0x51, 0x00); s &= i2c_write_addr8_data8(0x52, 0x96);
+    s &= i2c_write_addr8_data8(0x56, 0x08); s &= i2c_write_addr8_data8(0x57, 0x30);
+    s &= i2c_write_addr8_data8(0x61, 0x00); s &= i2c_write_addr8_data8(0x62, 0x00);
+    s &= i2c_write_addr8_data8(0x64, 0x00); s &= i2c_write_addr8_data8(0x65, 0x00);
+    s &= i2c_write_addr8_data8(0x66, 0xA0); s &= i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x22, 0x32); s &= i2c_write_addr8_data8(0x47, 0x14);
+    s &= i2c_write_addr8_data8(0x49, 0xFF); s &= i2c_write_addr8_data8(0x4A, 0x00);
+    s &= i2c_write_addr8_data8(0xFF, 0x00); s &= i2c_write_addr8_data8(0x7A, 0x0A);
+    s &= i2c_write_addr8_data8(0x7B, 0x00); s &= i2c_write_addr8_data8(0x78, 0x21);
+    s &= i2c_write_addr8_data8(0xFF, 0x01); s &= i2c_write_addr8_data8(0x23, 0x34);
+    s &= i2c_write_addr8_data8(0x42, 0x00); s &= i2c_write_addr8_data8(0x44, 0xFF);
+    s &= i2c_write_addr8_data8(0x45, 0x26); s &= i2c_write_addr8_data8(0x46, 0x05);
+    s &= i2c_write_addr8_data8(0x40, 0x40); s &= i2c_write_addr8_data8(0x0E, 0x06);
+    s &= i2c_write_addr8_data8(0x20, 0x1A); s &= i2c_write_addr8_data8(0x43, 0x40);
+    s &= i2c_write_addr8_data8(0xFF, 0x00); s &= i2c_write_addr8_data8(0x34, 0x03);
+    s &= i2c_write_addr8_data8(0x35, 0x44); s &= i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x31, 0x04); s &= i2c_write_addr8_data8(0x4B, 0x09);
+    s &= i2c_write_addr8_data8(0x4C, 0x05); s &= i2c_write_addr8_data8(0x4D, 0x04);
+    s &= i2c_write_addr8_data8(0xFF, 0x00); s &= i2c_write_addr8_data8(0x44, 0x00);
+    s &= i2c_write_addr8_data8(0x45, 0x20); s &= i2c_write_addr8_data8(0x47, 0x08);
+    s &= i2c_write_addr8_data8(0x48, 0x28); s &= i2c_write_addr8_data8(0x67, 0x00);
+    s &= i2c_write_addr8_data8(0x70, 0x04); s &= i2c_write_addr8_data8(0x71, 0x01);
+    s &= i2c_write_addr8_data8(0x72, 0xFE); s &= i2c_write_addr8_data8(0x76, 0x00);
+    s &= i2c_write_addr8_data8(0x77, 0x00); s &= i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x0D, 0x01); s &= i2c_write_addr8_data8(0xFF, 0x00);
+    s &= i2c_write_addr8_data8(0x80, 0x01); s &= i2c_write_addr8_data8(0x01, 0xF8);
+    s &= i2c_write_addr8_data8(0xFF, 0x01); s &= i2c_write_addr8_data8(0x8E, 0x01);
+    s &= i2c_write_addr8_data8(0x00, 0x01); s &= i2c_write_addr8_data8(0xFF, 0x00);
+    s &= i2c_write_addr8_data8(0x80, 0x00);
+    return s;
+}
+static bit configure_interrupt(void) {
+    uint8_t v = 0;
+    if (!i2c_write_addr8_data8(REG_SYSTEM_INTERRUPT_CONFIG_GPIO, 0x04)) return 0;
+    if (!i2c_read_addr8_data8(REG_GPIO_HV_MUX_ACTIVE_HIGH, &v)) return 0;
+    if (!i2c_write_addr8_data8(REG_GPIO_HV_MUX_ACTIVE_HIGH, v & ~0x10)) return 0;
+    if (!i2c_write_addr8_data8(REG_SYSTEM_INTERRUPT_CLEAR, 0x01)) return 0;
+    return 1;
+}
+static bit static_init(void) {
+    if (!load_default_tuning_settings()) return 0;
+    if (!configure_interrupt()) return 0;
+    return i2c_write_addr8_data8(REG_SYSTEM_SEQUENCE_CONFIG,
+        RANGE_SEQUENCE_STEP_DSS + RANGE_SEQUENCE_STEP_PRE_RANGE + RANGE_SEQUENCE_STEP_FINAL_RANGE);
+}
+static bit perform_single_ref_calibration(calibration_type_t ct) {
+    uint8_t sr, sc, is = 0; bit s;
+    if (ct == CALIBRATION_TYPE_VHV) { sc = 0x01; sr = 0x41; }
+    else { sc = 0x02; sr = 0x01; }
+    if (!i2c_write_addr8_data8(REG_SYSTEM_SEQUENCE_CONFIG, sc)) return 0;
+    if (!i2c_write_addr8_data8(REG_SYSRANGE_START, sr)) return 0;
+    do { s = i2c_read_addr8_data8(REG_RESULT_INTERRUPT_STATUS, &is); } while (s && ((is & 0x07) == 0));
+    if (!s) return 0;
+    if (!i2c_write_addr8_data8(REG_SYSTEM_INTERRUPT_CLEAR, 0x01)) return 0;
+    return i2c_write_addr8_data8(REG_SYSRANGE_START, 0x00);
+}
+static bit perform_ref_calibration(void) {
+    if (!perform_single_ref_calibration(CALIBRATION_TYPE_VHV)) return 0;
+    if (!perform_single_ref_calibration(CALIBRATION_TYPE_PHASE)) return 0;
+    return i2c_write_addr8_data8(REG_SYSTEM_SEQUENCE_CONFIG,
+        RANGE_SEQUENCE_STEP_DSS + RANGE_SEQUENCE_STEP_PRE_RANGE + RANGE_SEQUENCE_STEP_FINAL_RANGE);
+}
+bit vl53l0x_init(void) {
+    if (!device_is_booted()) return 0;
+    if (!data_init()) return 0;
+    if (!static_init()) return 0;
+    return perform_ref_calibration();
+}
+bit vl53l0x_read_range_single(unsigned int *range) {
+    static xdata uint8_t sr, is;
+    bit s;
+    sr = 0; is = 0;
+    s = i2c_write_addr8_data8(0x80, 0x01);
+    s &= i2c_write_addr8_data8(0xFF, 0x01);
+    s &= i2c_write_addr8_data8(0x00, 0x00);
+    s &= i2c_write_addr8_data8(0x91, stop_variable);
+    s &= i2c_write_addr8_data8(0x00, 0x01);
+    s &= i2c_write_addr8_data8(0xFF, 0x00);
+    s &= i2c_write_addr8_data8(0x80, 0x00);
+    if (!s) return 0;
+    if (!i2c_write_addr8_data8(REG_SYSRANGE_START, 0x01)) return 0;
+    do { s = i2c_read_addr8_data8(REG_SYSRANGE_START, &sr); } while (s && (sr & 0x01));
+    if (!s) return 0;
+    do { s = i2c_read_addr8_data8(REG_RESULT_INTERRUPT_STATUS, &is); } while (s && ((is & 0x07) == 0));
+    if (!s) return 0;
+    if (!i2c_read_addr8_data16(REG_RESULT_RANGE_STATUS + 10, range)) return 0;
+    if (!i2c_write_addr8_data8(REG_SYSTEM_INTERRUPT_CLEAR, 0x01)) return 0;
+    if (*range >= 8190) *range = VL53L0X_OUT_OF_RANGE;
+    return 1;
+}
 
 // ==================== Globals ====================
 volatile unsigned char pwm_L = 0, dir_L = 1, pwm_R = 0, dir_R = 1;
 volatile unsigned char play_siren = 0;
 volatile unsigned int siren_countdown = 0;
-IrRC5Decoder ir_decoder;
+xdata IrRC5Decoder ir_decoder;
 volatile IrDecodeStatus ir_status = IR_DECODE_BUSY;
+bit tof_ready = 0;
+xdata unsigned int tof_range_mm = VL53L0X_OUT_OF_RANGE;
+xdata unsigned char tof_tick = 0;
 
-typedef enum { MODE_MANUAL, MODE_CIRCLE, MODE_FIGURE_8, MODE_ROTATE_180, MODE_TRACK } RobotMode;
+typedef enum { MODE_MANUAL, MODE_CIRCLE, MODE_FIGURE_8, MODE_ROTATE_180, MODE_TRACK, MODE_VISION } RobotMode;
+
+#define IR_TIMEOUT_TICKS 200
+#define WIRE_LOSS_MV 30
+#define WIRE_LOSS_COUNT 50
+xdata unsigned int ir_timeout = 0;
 
 // ==================== Track Following Config ====================
-#define DEFAULT_ROBOT_SPEED   70
-#define FOLLOW_TURN_SPEED     14
+#define DEFAULT_ROBOT_SPEED   50
+#define FOLLOW_TURN_SPEED     11
 #define COIL_DIFF_OFFSET_MV   0
-#define ALIGN_DEADBAND_MV     220
-#define INTERSECTION_THRESHOLD_HIGH_MV 500
-#define INTERSECTION_THRESHOLD_LOW_MV  250
-#define INTERSECTION_DEBOUNCE_COUNT   1
+#define ALIGN_DEADBAND_MV     130
+#define INTERSECTION_THRESHOLD_HIGH_MV 550
+#define INTERSECTION_THRESHOLD_LOW_MV  350
+#define INTERSECTION_APPROACH_MV       350
+#define INTERSECTION_DEBOUNCE_COUNT   3
 #define INTERSECTION_COOLDOWN_MS      3500
 #define ACTION_SETTLE_STOP_MS       50
-#define BEFORE_TURN_CENTER_MS       1250
+#define BEFORE_TURN_CENTER_MS       450
 #define BEFORE_TURN_CENTER_SPEED    35
-#define AFTER_INTERSECTION_MS       2000
-#define AFTER_INTERSECTION_SPEED    40
+#define AFTER_INTERSECTION_MS       600
+#define AFTER_INTERSECTION_SPEED    25
 #define INTERSECTION_HOLD_MS        120
-#define SNAP_TURN_SPEED             55
-#define SNAP_TURN_LEFT_MS           1900
-#define SNAP_TURN_RIGHT_MS          1900
+#define SNAP_TURN_SPEED             40
+#define SNAP_TURN_LEFT_MS           1400
+#define SNAP_TURN_RIGHT_MS          1400
 #define TURN_LED_BLINK_MS           100
 #define NUM_PATHS             3
 #define NUM_INTERSECTIONS     8
@@ -197,8 +375,8 @@ typedef enum { MODE_MANUAL, MODE_CIRCLE, MODE_FIGURE_8, MODE_ROTATE_180, MODE_TR
 
 unsigned char code path_table[NUM_PATHS][NUM_INTERSECTIONS] = {
     { GO_FORWARD, GO_LEFT,    GO_LEFT,    GO_FORWARD, GO_RIGHT,   GO_LEFT,    GO_RIGHT,   STOP_ACTION },
-    { GO_LEFT,    GO_RIGHT,   GO_LEFT,    GO_RIGHT,   GO_FORWARD, GO_FORWARD, STOP_ACTION, STOP_ACTION },
-    { GO_RIGHT,   GO_FORWARD, GO_RIGHT,   GO_LEFT,    GO_RIGHT,   GO_LEFT,    GO_FORWARD, STOP_ACTION }
+    { GO_LEFT,    GO_RIGHT, GO_LEFT, GO_RIGHT,   GO_FORWARD, GO_FORWARD, STOP_ACTION, GO_FORWARD },
+    { GO_RIGHT,   GO_FORWARD,   GO_RIGHT,   GO_LEFT,    GO_RIGHT,   GO_LEFT,    GO_FORWARD, STOP_ACTION },
 };
 
 idata unsigned char track_path = 0, track_intersection = 0, track_done = 0;
@@ -217,7 +395,14 @@ static void pivot_left(unsigned char s) { dir_L = 1; dir_R = 0; pwm_L = s; pwm_R
 static void pivot_right(unsigned char s) { dir_L = 0; dir_R = 1; pwm_L = s; pwm_R = trim_right(s); }
 
 static void follow_wire(void) {
-    int diff = ((int)track_left_mv - (int)track_right_mv) + COIL_DIFF_OFFSET_MV;
+    int diff;
+    // Near intersection: cross wire corrupts L/R readings, just go straight
+    if (track_center_mv > INTERSECTION_APPROACH_MV) {
+        dir_L = 0; dir_R = 0; pwm_L = DEFAULT_ROBOT_SPEED; pwm_R = trim_right(DEFAULT_ROBOT_SPEED);
+        LED_LEFT = 0; LED_RIGHT = 0;
+        return;
+    }
+    diff = ((int)track_left_mv - (int)track_right_mv) + COIL_DIFF_OFFSET_MV;
     if (diff > ALIGN_DEADBAND_MV) {
         dir_L = 1; dir_R = 0; pwm_L = FOLLOW_TURN_SPEED; pwm_R = DEFAULT_ROBOT_SPEED;
         LED_LEFT = 1; LED_RIGHT = 0;
@@ -227,6 +412,27 @@ static void follow_wire(void) {
     } else {
         dir_L = 0; dir_R = 0; pwm_L = DEFAULT_ROBOT_SPEED; pwm_R = trim_right(DEFAULT_ROBOT_SPEED);
         LED_LEFT = 0; LED_RIGHT = 0;
+    }
+}
+
+static void process_tracking_gpio(void) {
+    unsigned char cmd0, cmd1;
+    if (ToF_Blocking()) {
+        motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
+        return;
+    }
+    LED_LEFT = 0; LED_RIGHT = 0;
+    if (TRACK_EN == 0) { motors_stop(); return; }
+    cmd0 = TRACK_CMD0 ? 1 : 0;
+    cmd1 = TRACK_CMD1 ? 1 : 0;
+    if (cmd1 == 0 && cmd0 == 0) {
+        motors_stop();
+    } else if (cmd1 == 0 && cmd0 == 1) {
+        pivot_left(70); LED_LEFT = 1;
+    } else if (cmd1 == 1 && cmd0 == 0) {
+        pivot_right(70); LED_RIGHT = 1;
+    } else {
+        motors_forward(70);
     }
 }
 
@@ -293,7 +499,7 @@ static void do_intersection_action(void) {
             break;
         default:
             LED_LEFT = 0; LED_RIGHT = 0; motors_stop(); track_done = 1;
-            break;
+            return; // exit immediately, don't increment or set cooldown
     }
     if (track_intersection < 255) track_intersection++;
     track_cooldown = INTERSECTION_COOLDOWN_MS;
@@ -307,10 +513,61 @@ void Track_Init(unsigned char pi) {
     motors_stop(); show_next_turn_led();
 }
 
-void Track_Process(void) {
-    unsigned char triggered = 0;
-    if (track_cooldown > 30) track_cooldown -= 30; else track_cooldown = 0;
-    if (!track_done) {
+void Track_Process(RobotMode *mode_ptr) {
+    unsigned char triggered;
+    unsigned char wire_loss = 0;
+
+    show_next_turn_led();
+
+    while (!track_done) {
+        // --- Read sensors (tight loop, no waitms) ---
+        track_left_mv   = ADC_to_mV(LEFT_COIL_PIN);
+        track_right_mv  = ADC_to_mV(RIGHT_COIL_PIN);
+        track_center_mv = ADC_to_mV(CENTER_COIL_PIN);
+
+        // --- Wire loss detection ---
+        if (track_left_mv < WIRE_LOSS_MV && track_right_mv < WIRE_LOSS_MV && track_center_mv < WIRE_LOSS_MV) {
+            if (wire_loss < 255) wire_loss++;
+            if (wire_loss >= WIRE_LOSS_COUNT) {
+                motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
+                trigger_siren();
+                LCD_SetCursor(0, 0); LCD_Print("WIRE LOST     ");
+                LCD_SetCursor(1, 0); LCD_Print("L:00 R:00     ");
+                goto track_stopped;
+            }
+        } else {
+            wire_loss = 0;
+        }
+
+        // --- ToF obstacle check ---
+        if (++tof_tick >= 3) { tof_tick = 0; ToF_Update(); }
+        if (ToF_Blocking()) {
+            motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
+            continue; // keep looping but don't move
+        }
+
+        // --- IR exit check ---
+        if (ir_status == IR_DECODE_DONE) {
+            if (ir_decoder.frame.data_type == IR_DATA_MISC) {
+                uint8_t mc;
+                if (IrRC5_FrameToMisc((IrRC5Frame *)&ir_decoder.frame, &mc)) {
+                    if (mc == IR_MISC_STOP || mc == IR_MISC_FORWARD || mc == IR_MISC_BACKWARD) {
+                        EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+                        motors_stop(); LED_LEFT = 0; LED_RIGHT = 0;
+                        *mode_ptr = MODE_MANUAL;
+                        LCD_SetCursor(0, 0); LCD_Print("STOPPED       ");
+                        return;
+                    }
+                }
+            }
+            EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+        }
+
+        // --- Cooldown ---
+        if (track_cooldown > 10) track_cooldown -= 10; else track_cooldown = 0;
+
+        // --- Intersection detection ---
+        triggered = 0;
         if (track_center_state == CENTER_READY) {
             if (track_cooldown == 0 && track_center_mv > INTERSECTION_THRESHOLD_HIGH_MV) {
                 if (track_high_deb < 255) track_high_deb++;
@@ -326,8 +583,45 @@ void Track_Process(void) {
                 if (track_low_deb >= INTERSECTION_DEBOUNCE_COUNT) { track_center_state = CENTER_READY; track_low_deb = 0; }
             } else { track_low_deb = 0; }
         }
+
+        // --- Follow wire when no intersection ---
         if (!triggered && !track_done) follow_wire();
-    } else { motors_stop(); }
+    }
+
+    // Track completed — stop permanently until STP or VISION signal
+    motors_stop(); LED_LEFT = 0; LED_RIGHT = 0;
+    trigger_siren();
+    LCD_SetCursor(0, 0); LCD_Print("TRACK DONE    ");
+    LCD_SetCursor(1, 0); LCD_Print("L:00 R:00     ");
+
+track_stopped:
+
+    // Stay locked here, ignore everything except STP or VISION
+    while (1) {
+        if (ir_status == IR_DECODE_DONE) {
+            if (ir_decoder.frame.data_type == IR_DATA_MISC) {
+                uint8_t mc;
+                if (IrRC5_FrameToMisc((IrRC5Frame *)&ir_decoder.frame, &mc)) {
+                    if (mc == IR_MISC_STOP) {
+                        EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+                        *mode_ptr = MODE_MANUAL;
+                        LCD_SetCursor(0, 0); LCD_Print("STOPPED       ");
+                        return;
+                    }
+                    if (mc == IR_MISC_VISION_ENABLE) {
+                        EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+                        *mode_ptr = MODE_VISION;
+                        LCD_SetCursor(0, 0); LCD_Print("VISION        ");
+                        return;
+                    }
+                }
+            }
+            // Consume and discard any other IR command
+            EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+        }
+        motors_stop(); // keep motors dead
+        waitms(10);
+    }
 }
 
 void LCD_PrintAxis(int8_t v) {
@@ -345,7 +639,7 @@ char _c51_external_startup(void) {
     SFRPAGE = 0x10; PFE0CN = 0x20; SFRPAGE = 0x00;
     CLKSEL = 0x00; CLKSEL = 0x00; while ((CLKSEL & 0x80) == 0);
     CLKSEL = 0x03; CLKSEL = 0x03; while ((CLKSEL & 0x80) == 0);
-    P0MDOUT |= 0x10; XBR0 = 0x01; XBR1 = 0x00; XBR2 = 0x40;
+    P0MDOUT |= 0x00; XBR0 = 0x00; XBR1 = 0x00; XBR2 = 0x40;
     return 0;
 }
 
@@ -428,6 +722,84 @@ float Volts_at_Pin(unsigned char pin) {
     return ((ADC_at_Pin(pin) * VDD) / 0x3FFF);
 }
 
+// ==================== Bit-Banged I2C ====================
+void BB_I2C_Delay(void) { Timer3us(5); }
+void BitBang_I2C_Init(void) { BB_SCL = 1; BB_SDA = 1; BB_I2C_Delay(); }
+bit BB_I2C_Start(void) {
+    BB_SDA = 1; BB_SCL = 1; BB_I2C_Delay();
+    if (BB_SDA == 0) return 0;
+    BB_SDA = 0; BB_I2C_Delay(); BB_SCL = 0; BB_I2C_Delay();
+    return 1;
+}
+void BB_I2C_Stop(void) { BB_SDA = 0; BB_I2C_Delay(); BB_SCL = 1; BB_I2C_Delay(); BB_SDA = 1; BB_I2C_Delay(); }
+bit BB_I2C_WriteByte(unsigned char b) {
+    unsigned char i; bit ack;
+    for (i = 0; i < 8; i++) {
+        BB_SDA = (b & 0x80) ? 1 : 0;
+        BB_I2C_Delay(); BB_SCL = 1; BB_I2C_Delay(); BB_SCL = 0; BB_I2C_Delay();
+        b <<= 1;
+    }
+    BB_SDA = 1; BB_I2C_Delay(); BB_SCL = 1; BB_I2C_Delay();
+    ack = (BB_SDA == 0) ? 1 : 0;
+    BB_SCL = 0; BB_I2C_Delay();
+    return ack;
+}
+unsigned char BB_I2C_ReadByte(bit nack) {
+    unsigned char i, b = 0;
+    BB_SDA = 1;
+    for (i = 0; i < 8; i++) {
+        b <<= 1; BB_SCL = 1; BB_I2C_Delay();
+        if (BB_SDA) b |= 1;
+        BB_SCL = 0; BB_I2C_Delay();
+    }
+    BB_SDA = nack ? 1 : 0;
+    BB_I2C_Delay(); BB_SCL = 1; BB_I2C_Delay(); BB_SCL = 0; BB_I2C_Delay();
+    BB_SDA = 1;
+    return b;
+}
+bit i2c_read_addr8_data8(unsigned char addr, unsigned char *val) {
+    if (!BB_I2C_Start()) return 0;
+    if (!BB_I2C_WriteByte(0x52)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_WriteByte(addr)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_Start()) return 0;
+    if (!BB_I2C_WriteByte(0x53)) { BB_I2C_Stop(); return 0; }
+    *val = BB_I2C_ReadByte(1); BB_I2C_Stop(); return 1;
+}
+bit i2c_read_addr8_data16(unsigned char addr, unsigned int *val) {
+    unsigned char hi, lo;
+    if (!BB_I2C_Start()) return 0;
+    if (!BB_I2C_WriteByte(0x52)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_WriteByte(addr)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_Start()) return 0;
+    if (!BB_I2C_WriteByte(0x53)) { BB_I2C_Stop(); return 0; }
+    hi = BB_I2C_ReadByte(0); lo = BB_I2C_ReadByte(1); BB_I2C_Stop();
+    *val = ((unsigned int)hi << 8) | lo; return 1;
+}
+bit i2c_write_addr8_data8(unsigned char addr, unsigned char val) {
+    if (!BB_I2C_Start()) return 0;
+    if (!BB_I2C_WriteByte(0x52)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_WriteByte(addr)) { BB_I2C_Stop(); return 0; }
+    if (!BB_I2C_WriteByte(val))  { BB_I2C_Stop(); return 0; }
+    BB_I2C_Stop(); return 1;
+}
+
+// ==================== ToF ====================
+bit ToF_Init(void) {
+    waitms(50);
+    if (vl53l0x_init()) { tof_ready = 1; tof_range_mm = VL53L0X_OUT_OF_RANGE; return 1; }
+    tof_ready = 0; return 0;
+}
+void ToF_Update(void) {
+    unsigned int r = VL53L0X_OUT_OF_RANGE;
+    if (!tof_ready) return;
+    if (vl53l0x_read_range_single(&r)) tof_range_mm = r;
+}
+bit ToF_Blocking(void) {
+    if (!tof_ready) return 0;
+    if (tof_range_mm == VL53L0X_OUT_OF_RANGE) return 0;
+    return (tof_range_mm < TOF_STOP_MM) ? 1 : 0;
+}
+
 // ==================== LCD ====================
 void LCD_Pulse_E(void) { LCD_E = 1; Timer3us(2); LCD_E = 0; Timer3us(50); }
 void LCD_Write_Nibble(unsigned char n) {
@@ -478,7 +850,9 @@ void main(void) {
     SFRPAGE = 0x20;
     P1MDOUT |= 0x7E; P2MDOUT |= 0x1E;
     P3MDIN |= 0x83; P3MDOUT |= 0x01; P3MDOUT &= ~0x82;
-    P0MDIN |= 0x05; P0MDOUT |= 0x04; P0MDOUT &= ~0x01; P0SKIP |= 0x01;
+    // P0: IR(0), ADC(1), LED(2), ESP32 inputs(3,4,5), I2C SDA(6)+SCL(7)
+    P0MDIN |= 0xFD; P0MDOUT |= 0x04; P0MDOUT &= ~0xF9;
+    P0 |= 0xF8; P0SKIP |= 0x39;
     SFRPAGE = 0x00;
     P3 |= 0x82; P0 |= 0x01;
     LED_LEFT = 0; LED_RIGHT = 0;
@@ -487,10 +861,40 @@ void main(void) {
     MOTOR_L_FWD = 0; MOTOR_L_REV = 0; MOTOR_R_FWD = 0; MOTOR_R_REV = 0;
     IrRC5_DecoderReset(&ir_decoder); Timer2_Init();
     LCD_Init();
-    LCD_SetCursor(0, 0); LCD_Print("WAITING       ");
+    LCD_SetCursor(0, 0); LCD_Print("STARTING...   ");
     LCD_SetCursor(1, 0); LCD_Print("L:00 R:00     ");
+    waitms(300);
+
+    // Init ToF sensor
+    BitBang_I2C_Init();
+    if (ToF_Init()) {
+        LCD_SetCursor(0, 0); LCD_Print("TOF OK        ");
+    } else {
+        LCD_SetCursor(0, 0); LCD_Print("TOF FAIL      ");
+    }
+    waitms(500);
 
     while(1) {
+        // --- ToF Update (every 3rd loop) ---
+        if (++tof_tick >= 3) { tof_tick = 0; ToF_Update(); }
+
+        // --- IR timeout auto-stop (manual/circle/fig8 modes) ---
+        if (current_mode == MODE_MANUAL || current_mode == MODE_CIRCLE ||
+            current_mode == MODE_FIGURE_8) {
+            if (ir_timeout < 60000) ir_timeout++;
+            if (ir_timeout >= IR_TIMEOUT_TICKS && (pwm_L > 0 || pwm_R > 0)) {
+                motors_stop(); LED_LEFT = 0; LED_RIGHT = 0;
+                current_mode = MODE_MANUAL;
+                LCD_SetCursor(0, 0); LCD_Print("NO SIGNAL     ");
+            }
+        }
+
+        // --- Obstacle Stop Check ---
+        if (ToF_Blocking()) {
+            motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
+        } else {
+            LED_LEFT = 0; LED_RIGHT = 0;
+
         // --- Mode Execution ---
         if (current_mode == MODE_CIRCLE) {
             dir_L = 0; dir_R = 0; pwm_L = CURVE_FAST;
@@ -512,11 +916,11 @@ void main(void) {
                 LCD_SetCursor(0, 0); LCD_Print("STOPPED"); trigger_siren();
             }
         } else if (current_mode == MODE_TRACK) {
-            track_left_mv   = ADC_to_mV(LEFT_COIL_PIN);
-            track_right_mv  = ADC_to_mV(RIGHT_COIL_PIN);
-            track_center_mv = ADC_to_mV(CENTER_COIL_PIN);
-            Track_Process();
+            Track_Process(&current_mode);
+        } else if (current_mode == MODE_VISION) {
+            process_tracking_gpio();
         }
+        } // end else (not blocking)
 
         // --- IR Remote ---
         if (ir_status == IR_DECODE_DONE) {
@@ -539,6 +943,8 @@ void main(void) {
                             case IR_MISC_SELECT_PATH_1:     current_mode = MODE_TRACK; Track_Init(0); break;
                             case IR_MISC_SELECT_PATH_1 + 1: current_mode = MODE_TRACK; Track_Init(1); break;
                             case IR_MISC_SELECT_PATH_1 + 2: current_mode = MODE_TRACK; Track_Init(2); break;
+                            case IR_MISC_VISION_ENABLE:  LCD_Print("VISION "); current_mode = MODE_VISION; motors_stop(); break;
+                            case IR_MISC_VISION_DISABLE: LCD_Print("MANUAL "); current_mode = MODE_MANUAL; motors_stop(); LED_LEFT = 0; LED_RIGHT = 0; break;
                             default: LCD_Print("???    "); break;
                         }
                     }
@@ -563,6 +969,7 @@ void main(void) {
                 }
             }
             EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
+            ir_timeout = 0;
         }
 
         // --- Hardware Buttons ---
