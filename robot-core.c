@@ -6,14 +6,14 @@
 #define VDD    3.3035
 #define SIREN_DURATION 3000
 
-// ==================== Calibration ====================
+// Calibration
 #define RIGHT_WHEEL_TRIM 90
 #define TURN_180_TIME_MS 700
 #define CURVE_FAST       80
 #define CURVE_SLOW       35
 #define FIG8_TIME_MS     3000
 
-// ==================== Pins ====================
+// Pins
 #define LCD_RS  P1_6
 #define LCD_E   P1_5
 #define LCD_D4  P1_4
@@ -36,16 +36,16 @@
 #define TRACK_CMD0  P0_4
 #define TRACK_CMD1  P0_5
 
-// ==================== ADC Pins ====================
+// ADC Pins
 #define LEFT_COIL_PIN   QFP32_MUX_P1_0
 #define RIGHT_COIL_PIN  QFP32_MUX_P2_6
 #define CENTER_COIL_PIN QFP32_MUX_P0_1
 
-// ==================== ToF Config ====================
+// ToF Config
 #define TOF_STOP_MM 180
 #define VL53L0X_OUT_OF_RANGE 8190
 
-// ==================== IR RC5 Protocol ====================
+// IR RC5 Protocol
 #define IR_RC5_ADDRESS            0x00U
 #define IR_HALF_BIT_US            889U
 #define IR_FULL_BIT_US            1778U
@@ -154,7 +154,7 @@ int IrRC5_FrameToMovement(const IrRC5Frame *f, int8_t *x, int8_t *y) {
     return IrRC5_DecodeMovement(f->payload, x, y);
 }
 
-// ==================== Forward Declarations ====================
+// Declarations
 void Timer3us(unsigned char us);
 void waitms(unsigned int ms);
 void LCD_Pulse_E(void);
@@ -181,7 +181,7 @@ bit ToF_Init(void);
 void ToF_Update(void);
 bit ToF_Blocking(void);
 
-// ==================== VL53L0X Registers ====================
+//VL53L0X Registers
 #define REG_IDENTIFICATION_MODEL_ID                     0xC0
 #define REG_VHV_CONFIG_PAD_SCL_SDA_EXTSUP_HV           0x89
 #define REG_MSRC_CONFIG_CONTROL                         0x60
@@ -327,7 +327,7 @@ bit vl53l0x_read_range_single(unsigned int *range) {
     return 1;
 }
 
-// ==================== Globals ====================
+//Globals
 volatile unsigned char pwm_L = 0, dir_L = 1, pwm_R = 0, dir_R = 1;
 volatile unsigned char play_siren = 0;
 volatile unsigned int siren_countdown = 0;
@@ -344,7 +344,7 @@ typedef enum { MODE_MANUAL, MODE_CIRCLE, MODE_FIGURE_8, MODE_ROTATE_180, MODE_TR
 #define WIRE_LOSS_COUNT 50
 xdata unsigned int ir_timeout = 0;
 
-// ==================== Track Following Config ====================
+//Track Following Config
 #define DEFAULT_ROBOT_SPEED   50
 #define FOLLOW_TURN_SPEED     11
 #define COIL_DIFF_OFFSET_MV   0
@@ -384,7 +384,7 @@ idata unsigned int  track_cooldown = 0;
 idata unsigned char track_center_state = CENTER_READY, track_high_deb = 0, track_low_deb = 0;
 idata unsigned int track_left_mv = 0, track_right_mv = 0, track_center_mv = 0;
 
-// ==================== Motor Helpers ====================
+// Motors
 static unsigned char trim_right(unsigned char p) {
     unsigned int s = ((unsigned int)p * RIGHT_WHEEL_TRIM) / 100;
     return (s > 100) ? 100 : (unsigned char)s;
@@ -396,7 +396,7 @@ static void pivot_right(unsigned char s) { dir_L = 0; dir_R = 1; pwm_L = s; pwm_
 
 static void follow_wire(void) {
     int diff;
-    // Near intersection: cross wire corrupts L/R readings, just go straight
+
     if (track_center_mv > INTERSECTION_APPROACH_MV) {
         dir_L = 0; dir_R = 0; pwm_L = DEFAULT_ROBOT_SPEED; pwm_R = trim_right(DEFAULT_ROBOT_SPEED);
         LED_LEFT = 0; LED_RIGHT = 0;
@@ -499,7 +499,7 @@ static void do_intersection_action(void) {
             break;
         default:
             LED_LEFT = 0; LED_RIGHT = 0; motors_stop(); track_done = 1;
-            return; // exit immediately, don't increment or set cooldown
+            return;
     }
     if (track_intersection < 255) track_intersection++;
     track_cooldown = INTERSECTION_COOLDOWN_MS;
@@ -520,12 +520,12 @@ void Track_Process(RobotMode *mode_ptr) {
     show_next_turn_led();
 
     while (!track_done) {
-        // --- Read sensors (tight loop, no waitms) ---
+        //Read sensors
         track_left_mv   = ADC_to_mV(LEFT_COIL_PIN);
         track_right_mv  = ADC_to_mV(RIGHT_COIL_PIN);
         track_center_mv = ADC_to_mV(CENTER_COIL_PIN);
 
-        // --- Wire loss detection ---
+        //Wire loss detection
         if (track_left_mv < WIRE_LOSS_MV && track_right_mv < WIRE_LOSS_MV && track_center_mv < WIRE_LOSS_MV) {
             if (wire_loss < 255) wire_loss++;
             if (wire_loss >= WIRE_LOSS_COUNT) {
@@ -539,14 +539,14 @@ void Track_Process(RobotMode *mode_ptr) {
             wire_loss = 0;
         }
 
-        // --- ToF obstacle check ---
+        // ToF obstacle check
         if (++tof_tick >= 3) { tof_tick = 0; ToF_Update(); }
         if (ToF_Blocking()) {
             motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
-            continue; // keep looping but don't move
+            continue; 
         }
 
-        // --- IR exit check ---
+        // IR exit check
         if (ir_status == IR_DECODE_DONE) {
             if (ir_decoder.frame.data_type == IR_DATA_MISC) {
                 uint8_t mc;
@@ -563,10 +563,10 @@ void Track_Process(RobotMode *mode_ptr) {
             EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
         }
 
-        // --- Cooldown ---
+      
         if (track_cooldown > 10) track_cooldown -= 10; else track_cooldown = 0;
 
-        // --- Intersection detection ---
+   
         triggered = 0;
         if (track_center_state == CENTER_READY) {
             if (track_cooldown == 0 && track_center_mv > INTERSECTION_THRESHOLD_HIGH_MV) {
@@ -584,11 +584,11 @@ void Track_Process(RobotMode *mode_ptr) {
             } else { track_low_deb = 0; }
         }
 
-        // --- Follow wire when no intersection ---
+    
         if (!triggered && !track_done) follow_wire();
     }
 
-    // Track completed — stop permanently until STP or VISION signal
+
     motors_stop(); LED_LEFT = 0; LED_RIGHT = 0;
     trigger_siren();
     LCD_SetCursor(0, 0); LCD_Print("TRACK DONE    ");
@@ -596,7 +596,7 @@ void Track_Process(RobotMode *mode_ptr) {
 
 track_stopped:
 
-    // Stay locked here, ignore everything except STP or VISION
+
     while (1) {
         if (ir_status == IR_DECODE_DONE) {
             if (ir_decoder.frame.data_type == IR_DATA_MISC) {
@@ -616,10 +616,10 @@ track_stopped:
                     }
                 }
             }
-            // Consume and discard any other IR command
+  
             EA = 0; IrRC5_DecoderReset((IrRC5Decoder *)&ir_decoder); ir_status = IR_DECODE_BUSY; EA = 1;
         }
-        motors_stop(); // keep motors dead
+        motors_stop();
         waitms(10);
     }
 }
@@ -630,7 +630,7 @@ void LCD_PrintAxis(int8_t v) {
     LCD_Data('0' + v);
 }
 
-// ==================== Hardware Init & ISRs ====================
+// Hardware Init & ISRs
 void trigger_siren(void) { play_siren = 1; siren_countdown = SIREN_DURATION; }
 
 char _c51_external_startup(void) {
@@ -655,7 +655,7 @@ void Timer2_ISR(void) interrupt 5 using 1 {
     unsigned char cur_ir, tick_limit;
     TF2H = 0;
 
-    // Siren
+   
     if (play_siren) {
         if (siren_countdown > 0) siren_countdown--; else play_siren = 0;
         siren_timer++;
@@ -665,7 +665,7 @@ void Timer2_ISR(void) interrupt 5 using 1 {
         if (buzzer_tick >= tick_limit) { buzzer_tick = 0; BUZZER = !BUZZER; }
     } else { BUZZER = 0; siren_timer = 0; buzzer_tick = 0; }
 
-    // PWM
+
     pwm_counter++;
     if (pwm_counter >= 100) pwm_counter = 0;
     if (pwm_L == 0) { MOTOR_L_FWD = 0; MOTOR_L_REV = 0; }
@@ -675,7 +675,7 @@ void Timer2_ISR(void) interrupt 5 using 1 {
     else if (pwm_counter < pwm_R) { MOTOR_R_FWD = !dir_R; MOTOR_R_REV = dir_R; }
     else { MOTOR_R_FWD = 0; MOTOR_R_REV = 0; }
 
-    // IR Decoder
+
     ir_ticks += 100;
     cur_ir = IR_PIN;
     if (cur_ir != last_ir) {
@@ -688,7 +688,7 @@ void Timer2_ISR(void) interrupt 5 using 1 {
     }
 }
 
-// ==================== ADC ====================
+//ADC
 void InitADC(void) {
     SFRPAGE = 0x00; ADEN = 0;
     ADC0CN1 = 0x80; ADC0CF0 = ((SYSCLK/SARCLK) << 3);
@@ -722,7 +722,7 @@ float Volts_at_Pin(unsigned char pin) {
     return ((ADC_at_Pin(pin) * VDD) / 0x3FFF);
 }
 
-// ==================== Bit-Banged I2C ====================
+//Bit-Banged I2C
 void BB_I2C_Delay(void) { Timer3us(5); }
 void BitBang_I2C_Init(void) { BB_SCL = 1; BB_SDA = 1; BB_I2C_Delay(); }
 bit BB_I2C_Start(void) {
@@ -783,7 +783,7 @@ bit i2c_write_addr8_data8(unsigned char addr, unsigned char val) {
     BB_I2C_Stop(); return 1;
 }
 
-// ==================== ToF ====================
+// ToF
 bit ToF_Init(void) {
     waitms(50);
     if (vl53l0x_init()) { tof_ready = 1; tof_range_mm = VL53L0X_OUT_OF_RANGE; return 1; }
@@ -800,7 +800,7 @@ bit ToF_Blocking(void) {
     return (tof_range_mm < TOF_STOP_MM) ? 1 : 0;
 }
 
-// ==================== LCD ====================
+//LCD
 void LCD_Pulse_E(void) { LCD_E = 1; Timer3us(2); LCD_E = 0; Timer3us(50); }
 void LCD_Write_Nibble(unsigned char n) {
     LCD_D4 = (n & 1); LCD_D5 = (n >> 1) & 1; LCD_D6 = (n >> 2) & 1; LCD_D7 = (n >> 3) & 1;
@@ -827,7 +827,7 @@ void LCD_PrintMotorCompact(unsigned char L, unsigned char R) {
     LCD_Print("  ");
 }
 
-// ==================== Timer3 / Waitms ====================
+// Timer 3
 void Timer3us(unsigned char us) {
     unsigned char i; CKCON0 |= 0x40;
     TMR3RL = (-(SYSCLK)/1000000L); TMR3 = TMR3RL; TMR3CN0 = 0x04;
@@ -839,7 +839,7 @@ void waitms(unsigned int ms) {
     for (j = 0; j < ms; j++) for (k = 0; k < 4; k++) Timer3us(250);
 }
 
-// ==================== Main ====================
+//MAIN
 void main(void) {
     xdata unsigned char btn_L_pressed = 0, btn_R_pressed = 0;
     xdata RobotMode current_mode = MODE_MANUAL;
@@ -850,7 +850,6 @@ void main(void) {
     SFRPAGE = 0x20;
     P1MDOUT |= 0x7E; P2MDOUT |= 0x1E;
     P3MDIN |= 0x83; P3MDOUT |= 0x01; P3MDOUT &= ~0x82;
-    // P0: IR(0), ADC(1), LED(2), ESP32 inputs(3,4,5), I2C SDA(6)+SCL(7)
     P0MDIN |= 0xFD; P0MDOUT |= 0x04; P0MDOUT &= ~0xF9;
     P0 |= 0xF8; P0SKIP |= 0x39;
     SFRPAGE = 0x00;
@@ -865,7 +864,7 @@ void main(void) {
     LCD_SetCursor(1, 0); LCD_Print("L:00 R:00     ");
     waitms(300);
 
-    // Init ToF sensor
+  
     BitBang_I2C_Init();
     if (ToF_Init()) {
         LCD_SetCursor(0, 0); LCD_Print("TOF OK        ");
@@ -875,10 +874,10 @@ void main(void) {
     waitms(500);
 
     while(1) {
-        // --- ToF Update (every 3rd loop) ---
+       
         if (++tof_tick >= 3) { tof_tick = 0; ToF_Update(); }
 
-        // --- IR timeout auto-stop (manual/circle/fig8 modes) ---
+     
         if (current_mode == MODE_MANUAL || current_mode == MODE_CIRCLE ||
             current_mode == MODE_FIGURE_8) {
             if (ir_timeout < 60000) ir_timeout++;
@@ -889,13 +888,11 @@ void main(void) {
             }
         }
 
-        // --- Obstacle Stop Check ---
         if (ToF_Blocking()) {
             motors_stop(); LED_LEFT = 1; LED_RIGHT = 1;
         } else {
             LED_LEFT = 0; LED_RIGHT = 0;
 
-        // --- Mode Execution ---
         if (current_mode == MODE_CIRCLE) {
             dir_L = 0; dir_R = 0; pwm_L = CURVE_FAST;
             pwm_R = ((unsigned int)CURVE_SLOW * RIGHT_WHEEL_TRIM) / 100;
@@ -920,9 +917,9 @@ void main(void) {
         } else if (current_mode == MODE_VISION) {
             process_tracking_gpio();
         }
-        } // end else (not blocking)
+        } 
 
-        // --- IR Remote ---
+        //IR
         if (ir_status == IR_DECODE_DONE) {
             if (ir_decoder.frame.data_type == IR_DATA_MISC) {
                 uint8_t mc;
@@ -972,7 +969,7 @@ void main(void) {
             ir_timeout = 0;
         }
 
-        // --- Hardware Buttons ---
+        // Buttons
         if (BTN_L == 0) {
             if (btn_L_pressed == 0) {
                 if (current_mode == MODE_TRACK && !track_done) {
