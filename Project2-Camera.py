@@ -7,13 +7,12 @@ import requests
 import numpy as np
 from collections import deque
 
-ESP32_IP = '172.20.10.3'   # replace if needed
+ESP32_IP = '172.20.10.3'  
 UDP_PORT = 1234
 STREAM_URL = f'http://{ESP32_IP}:81/stream'
 
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# ---------------- UDP command helpers ----------------
 
 CMD_TRACKING_ENABLE = 0x03
 CMD_LEFT            = 0x10
@@ -42,7 +41,7 @@ def send_forward() -> None:
 def send_stop() -> None:
     send_raw(CMD_STOP)
 
-# ---------------- MediaPipe setup ----------------
+
 
 mp_pose = mp.solutions.pose
 mp_draw = mp.solutions.drawing_utils
@@ -52,17 +51,17 @@ pose = mp_pose.Pose(
     min_tracking_confidence=0.5
 )
 
-# ---------------- Tracking tuning ----------------
+
 
 TARGET_SHOULDER_WIDTH = 0.30
 ARMS_HISTORY_LENGTH = 8
 NO_TARGET_STOP_DELAY = 0.20
 TRACKING_ENABLE_REPEAT = 2.0
 
-# EMA smoothing for nose x
+
 CX_SMOOTHING = 0.72
 
-# Proportional steering using pulse blending
+
 CENTER_X = 0.50
 CENTER_DEADBAND = 0.05
 FULL_TURN_OFFSET = 0.30
@@ -72,15 +71,15 @@ MIN_TURN_FRACTION = 0.10
 MAX_TURN_FRACTION = 0.92
 TURN_CURVE = 1.35
 
-# Refresh discrete commands so ESP32 keeps getting updates
+
 COMMAND_REFRESH = 0.08
 FORWARD_REFRESH = 0.18
 
-# Inference frame size
+
 INFER_W = 160
 INFER_H = 120
 
-# ---------------- Tracking helpers ----------------
+
 
 def check_arms_raised(landmarks) -> bool:
     left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
@@ -123,7 +122,7 @@ def compute_turn_mix(cx: float):
 
     turn_fraction = MIN_TURN_FRACTION + mag * (MAX_TURN_FRACTION - MIN_TURN_FRACTION)
 
-    # swapped to match your robot
+
     if offset < 0:
         desired_turn = 'RIGHT'
     else:
@@ -131,7 +130,7 @@ def compute_turn_mix(cx: float):
 
     return desired_turn, turn_fraction
 
-# ---------------- Threaded MJPEG frame capture ----------------
+
 
 class FrameGrabber(threading.Thread):
     def __init__(self, url: str):
@@ -203,7 +202,7 @@ class FrameGrabber(threading.Thread):
     def stop(self):
         self.running = False
 
-# ---------------- Threaded inference ----------------
+
 
 class InferenceEngine(threading.Thread):
     def __init__(self):
@@ -243,7 +242,7 @@ class InferenceEngine(threading.Thread):
     def stop(self):
         self.running = False
 
-# ---------------- Main ----------------
+
 
 grabber = FrameGrabber(STREAM_URL)
 grabber.start()
@@ -379,9 +378,7 @@ try:
 
                 desired_turn, turn_fraction = compute_turn_mix(cx_norm)
 
-                # Time-sliced proportional steering:
-                # small offset => mostly forward, brief turn
-                # big offset   => mostly turn
+             
                 elapsed = now - control_cycle_start
                 if elapsed >= CONTROL_PERIOD:
                     control_cycle_start = now
